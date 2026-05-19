@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from google import genai
+from telegram import BotCommand
 
 # Import cấu hình Database từ file database.py
 from database import SessionLocal, Transaction
@@ -172,13 +173,23 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """Bộ bắt lỗi tập trung nhằm tránh việc bot bị văng khi mất kết nối mạng đột ngột"""
     print(f"⚠️ Hệ thống gặp sự cố nhỏ: {context.error}")
 
+async def post_init(application: Application):
+    """Tự động cài đặt danh sách lệnh gợi ý khi bot khởi động"""
+    commands = [
+        BotCommand("start", "Khởi động bot Quản gia Tài chính"),
+        BotCommand("thongke", "Xem báo cáo thu chi tháng này"),
+        BotCommand("undo", "Xóa nhanh giao dịch vừa nhập")
+    ]
+    await application.bot.set_my_commands(commands)
+
+
 if __name__ == '__main__':
     # Kích hoạt web server lách luật chạy trước
     print("Đang bật web server giả để giữ kết nối Render...")
     keep_alive()
     
     print("Khởi động Finance AI Bot...")
-    app = Application.builder().token(TOKEN).build()
+    app = Application.builder().token(TOKEN).post_init(post_init).build()
 
     # Đăng ký các bộ lắng nghe lệnh và tin nhắn
     app.add_handler(CommandHandler("start", start_command))
