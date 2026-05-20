@@ -13,8 +13,15 @@ SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
 if SQLALCHEMY_DATABASE_URL and SQLALCHEMY_DATABASE_URL.startswith("postgres://"):
     SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# Xóa connect_args={"check_same_thread": False} vì đó là của SQLite
-engine = create_engine(SQLALCHEMY_DATABASE_URL)
+
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    pool_size=5,          # Giữ tối đa 5 kết nối mở sẵn
+    max_overflow=10,      # Cho phép mở thêm tối đa 10 kết nối nếu quá tải
+    pool_timeout=30,      # Chờ tối đa 30 giây để lấy kết nối
+    pool_recycle=1800,    # Tự động xóa kết nối cũ sau 30 phút để tránh bị Neon ngắt ngầm
+    pool_pre_ping=True    # CHÌA KHÓA VÀNG: Trước khi chạy lệnh, "nhá máy" (ping) thử xem đường ống còn sống không. Nếu chết thì tự tạo cái mới luôn!
+)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
