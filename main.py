@@ -78,6 +78,55 @@ async def thongke_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Lỗi khi lấy dữ liệu thống kê: {e}")
 
+async def lichsu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Liệt kê TOÀN BỘ danh sách chi tiết các giao dịch trong tháng hiện tại"""
+    user_id = str(update.message.from_user.id)
+    now = datetime.now()
+    
+    try:
+        db = SessionLocal()
+        # Lấy tất cả lịch sử, mới nhất lên đầu
+        transactions = db.query(Transaction).filter(
+            Transaction.user_id == user_id
+        ).order_by(Transaction.id.desc()).all()
+        db.close()
+        
+        # Tạo một mảng để chứa các đoạn tin nhắn (tránh bị quá giới hạn của Telegram)
+        messages = []
+        current_msg = f"📜 <b>NHẬT KÝ CHI TIÊU THÁNG {now.month}/{now.year}</b>\n"
+        current_msg += "---------------------------------\n"
+        
+        count = 0
+        for t in transactions:
+            if t.created_at.month == now.month and t.created_at.year == now.year:
+                count += 1
+                ngay_thang = t.created_at.strftime("%d/%m")
+                icon = '🟢' if t.type == 'income' else '🔴'
+                
+                # Tạo nội dung cho 1 dòng
+                line = f"{icon} <b>{ngay_thang}</b> - {t.category}: <b>{t.amount:,.0f}đ</b> <i>({t.note})</i>\n"
+                
+                # Nếu tin nhắn hiện tại sắp chạm ngưỡng 4000 ký tự của Telegram -> Cắt và sang trang mới
+                if len(current_msg) + len(line) > 3800:
+                    messages.append(current_msg) # Cất tin nhắn hiện tại vào mảng
+                    current_msg = "" # Xóa trắng để viết tin nhắn tiếp theo
+                
+                current_msg += line
+        
+        if count == 0:
+            current_msg += "<i>Chưa có giao dịch nào được ghi nhận trong tháng này.</i>"
+            
+        # Đưa đoạn tin nhắn cuối cùng vào mảng
+        messages.append(current_msg)
+        
+        # Vòng lặp gửi lần lượt từng tin nhắn trong mảng cho người dùng
+        for m in messages:
+            if m.strip(): # Chỉ gửi nếu tin nhắn có nội dung
+                await update.message.reply_text(m, parse_mode='HTML')
+                
+    except Exception as e:
+        await update.message.reply_text(f"❌ Lỗi khi lấy nhật ký chi tiêu: {e}")
+
 async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Lệnh /undo xóa giao dịch vừa nhập gần nhất của user"""
     user_id = str(update.message.from_user.id)
@@ -178,6 +227,7 @@ async def post_init(application: Application):
     commands = [
         BotCommand("start", "Khởi động bot Quản gia Tài chính"),
         BotCommand("thongke", "Xem báo cáo thu chi tháng này"),
+        BotCommand("lichsu", "Xem nhật ký chi tiết các khoản thu chi"),
         BotCommand("undo", "Xóa nhanh giao dịch vừa nhập")
     ]
     await application.bot.set_my_commands(commands)
@@ -195,7 +245,9 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("thongke", thongke_command))
     app.add_handler(CommandHandler("undo", undo_command))
+    app.add_handler(CommandHandler("lichsu", lichsu_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    
     
     # Đăng ký bộ xử lý lỗi mạng ngầm
     app.add_error_handler(error_handler)
