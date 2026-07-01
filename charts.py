@@ -2,6 +2,7 @@ import matplotlib
 matplotlib.use('Agg')  # Chạy headless, không cần GUI
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+import numpy as np
 from io import BytesIO
 
 
@@ -29,12 +30,14 @@ CATEGORY_LABELS = {
 
 DEFAULT_COLOR = '#B0BEC5'
 
+MONTH_NAMES = ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10', 'T11', 'T12']
+
 
 def format_vnd(amount):
     """Format số tiền VNĐ cho dễ đọc trên biểu đồ."""
-    if amount >= 1_000_000:
+    if abs(amount) >= 1_000_000:
         return f"{amount / 1_000_000:.1f}tr"
-    elif amount >= 1_000:
+    elif abs(amount) >= 1_000:
         return f"{amount / 1_000:.0f}k"
     return f"{amount:.0f}"
 
@@ -129,3 +132,89 @@ def generate_monthly_chart(tong_thu, tong_chi, chi_tiet_chi: dict, month: int, y
     plt.close(fig)
 
     return buf
+
+
+def generate_yearly_overview_chart(monthly_data: dict, year: int):
+    """
+    Tạo biểu đồ cột tổng hợp cả năm: mỗi tháng có 2 cột Thu (xanh) và Chi (đỏ).
+    
+    Args:
+        monthly_data: dict dạng {month: {'thu': float, 'chi': float}}
+        year: năm hiển thị
+    
+    Trả về BytesIO chứa ảnh PNG.
+    """
+    plt.style.use('dark_background')
+    fig, ax = plt.subplots(figsize=(14, 6), facecolor='#1a1a2e')
+    ax.set_facecolor('#16213e')
+
+    # Chuẩn bị dữ liệu cho 12 tháng
+    thu_values = []
+    chi_values = []
+    for m in range(1, 13):
+        data = monthly_data.get(m, {'thu': 0, 'chi': 0})
+        thu_values.append(data['thu'])
+        chi_values.append(data['chi'])
+
+    x = np.arange(12)  # Vị trí các tháng
+    bar_width = 0.35    # Độ rộng mỗi cột
+
+    # Vẽ 2 nhóm cột: Thu (xanh) và Chi (đỏ)
+    bars_thu = ax.bar(x - bar_width/2, thu_values, bar_width,
+                      label='Thu nhập', color='#00d2ff',
+                      edgecolor='white', linewidth=0.3, zorder=3)
+    bars_chi = ax.bar(x + bar_width/2, chi_values, bar_width,
+                      label='Chi tiêu', color='#ff416c',
+                      edgecolor='white', linewidth=0.3, zorder=3)
+
+    # Annotation số tiền lên đầu mỗi cột (chỉ hiện nếu > 0)
+    for bar in bars_thu:
+        h = bar.get_height()
+        if h > 0:
+            ax.text(bar.get_x() + bar.get_width() / 2, h,
+                    format_vnd(h), ha='center', va='bottom',
+                    fontsize=7, fontweight='bold', color='#00d2ff', rotation=45)
+    for bar in bars_chi:
+        h = bar.get_height()
+        if h > 0:
+            ax.text(bar.get_x() + bar.get_width() / 2, h,
+                    format_vnd(h), ha='center', va='bottom',
+                    fontsize=7, fontweight='bold', color='#ff416c', rotation=45)
+
+    # Cấu hình trục & style
+    ax.set_xlabel('Tháng', fontsize=11, color='#ccc')
+    ax.set_ylabel('VNĐ', fontsize=11, color='#ccc')
+    ax.set_title(f'📊 TỔNG HỢP THU CHI NĂM {year}',
+                 fontsize=16, fontweight='bold', color='white', pad=15)
+    ax.set_xticks(x)
+    ax.set_xticklabels(MONTH_NAMES, fontsize=10, color='#ddd')
+    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda v, _: format_vnd(v)))
+    ax.tick_params(colors='#aaa')
+    ax.grid(axis='y', alpha=0.15, color='white')
+    ax.set_axisbelow(True)
+    ax.legend(loc='upper right', fontsize=10, facecolor='#16213e',
+              edgecolor='#444', labelcolor='white')
+
+    # Dòng tổng kết ở dưới
+    total_thu = sum(thu_values)
+    total_chi = sum(chi_values)
+    so_du = total_thu - total_chi
+    color_du = '#00d2ff' if so_du >= 0 else '#ff416c'
+    sign = '+' if so_du >= 0 else ''
+
+    summary = (f"🟢 Tổng thu cả năm: {format_vnd(total_thu)} VNĐ    |    "
+               f"🔴 Tổng chi cả năm: {format_vnd(total_chi)} VNĐ    |    "
+               f"💰 Số dư: {sign}{format_vnd(so_du)} VNĐ")
+    fig.text(0.5, 0.01, summary, ha='center', va='bottom',
+             fontsize=10, color=color_du, fontweight='bold')
+
+    # --- Xuất ảnh ---
+    plt.tight_layout(rect=[0, 0.05, 1, 0.97])
+    buf = BytesIO()
+    fig.savefig(buf, format='png', dpi=150, bbox_inches='tight',
+                facecolor=fig.get_facecolor(), edgecolor='none')
+    buf.seek(0)
+    plt.close(fig)
+
+    return buf
+

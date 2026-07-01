@@ -68,3 +68,17 @@ def get_transactions_by_month(user_id: str, month: int, year: int):
             db.expunge(t)
         
         return transactions
+
+
+def get_transactions_by_year(user_id: str, year: int):
+    """Query toàn bộ giao dịch trong 1 năm, dùng cho biểu đồ tổng hợp."""
+    with get_db() as db:
+        transactions = db.query(Transaction).filter(
+            Transaction.user_id == user_id,
+            extract('year', Transaction.created_at) == year
+        ).order_by(Transaction.created_at.asc()).all()
+        
+        for t in transactions:
+            db.expunge(t)
+        
+        return transactions

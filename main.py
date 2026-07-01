@@ -8,9 +8,9 @@ from google import genai
 from telegram import BotCommand
 
 # Import cấu hình Database từ file database.py
-from database import SessionLocal, Transaction, get_db, get_transactions_by_month
+from database import SessionLocal, Transaction, get_db, get_transactions_by_month, get_transactions_by_year
 # Import module tạo biểu đồ
-from charts import generate_monthly_chart
+from charts import generate_monthly_chart, generate_yearly_overview_chart
 # Import bộ giữ mạng sống từ file keep_alive.py
 from keep_alive import keep_alive
 
@@ -66,9 +66,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📊 /thongke - Xem báo cáo thu chi tháng này\n"
         "📜 /lichsu - Xem nhật ký chi tiết các khoản thu chi\n"
         "📈 /bieuedo - Xem biểu đồ thống kê thu chi\n"
+        "📉 /tonghop - Biểu đồ tổng hợp thu chi cả năm\n"
         "⏪ /undo - Xóa nhanh giao dịch vừa nhập\n\n"
         "💡 <b>Mẹo:</b> Thêm số tháng sau lệnh để xem tháng khác!\n"
-        "Ví dụ: <code>/thongke 6</code> hoặc <code>/lichsu 3 2025</code>",
+        "Ví dụ: <code>/thongke 6</code> hoặc <code>/lichsu 3 2025</code>\n"
+        "Xem năm khác: <code>/tonghop 2025</code>",
         parse_mode='HTML'
     )
 
@@ -217,6 +219,61 @@ async def bieuedo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await processing_msg.edit_text(f"❌ Lỗi khi tạo biểu đồ: {e}")
 
+async def tonghop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lệnh /tonghop gửi biểu đồ tổng hợp thu chi cả năm (mỗi tháng 2 cột Thu/Chi)"""
+    user_id = str(update.message.from_user.id)
+    now = datetime.now()
+    
+    # Parse năm từ tham số (mặc định năm hiện tại)
+    try:
+        if context.args and len(context.args) >= 1:
+            year = int(context.args[0])
+            if year < 2020 or year > 2030:
+                raise ValueError("Năm phải từ 2020 đến 2030")
+        else:
+            year = now.year
+    except ValueError as e:
+        if "Năm" in str(e):
+            await update.message.reply_text(f"❌ {e}")
+        else:
+            await update.message.reply_text("❌ Sai cú pháp! Dùng: /tonghop [năm]\nVí dụ: /tonghop 2025")
+        return
+    
+    processing_msg = await update.message.reply_text("⏳ Đang tạo biểu đồ tổng hợp...")
+    
+    try:
+        transactions = get_transactions_by_year(user_id, year)
+        
+        if not transactions:
+            await processing_msg.edit_text(
+                f"📉 Chưa có dữ liệu nào trong năm {year} để tạo biểu đồ tổng hợp."
+            )
+            return
+        
+        # Gom dữ liệu theo tháng
+        monthly_data = {}
+        for t in transactions:
+            m = t.created_at.month
+            if m not in monthly_data:
+                monthly_data[m] = {'thu': 0, 'chi': 0}
+            if t.type == 'income':
+                monthly_data[m]['thu'] += t.amount
+            elif t.type == 'expense':
+                monthly_data[m]['chi'] += t.amount
+        
+        # Tạo biểu đồ tổng hợp
+        chart_image = generate_yearly_overview_chart(monthly_data, year)
+        
+        await update.message.reply_photo(
+            photo=chart_image,
+            caption=f"📉 Biểu đồ tổng hợp thu chi năm {year}"
+        )
+        
+        await processing_msg.delete()
+        
+    except Exception as e:
+        await processing_msg.edit_text(f"❌ Lỗi khi tạo biểu đồ tổng hợp: {e}")
+
 async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Lệnh /undo xóa giao dịch vừa nhập gần nhất của user"""
     user_id = str(update.message.from_user.id)
@@ -317,6 +374,7 @@ async def post_init(application: Application):
         BotCommand("thongke", "Báo cáo thu chi (thêm số tháng để xem tháng khác)"),
         BotCommand("lichsu", "Nhật ký chi tiết (thêm số tháng để xem tháng khác)"),
         BotCommand("bieuedo", "Biểu đồ thống kê thu chi"),
+        BotCommand("tonghop", "Biểu đồ tổng hợp thu chi cả năm"),
         BotCommand("undo", "Xóa nhanh giao dịch vừa nhập")
     ]
     await application.bot.set_my_commands(commands)
@@ -336,6 +394,7 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("undo", undo_command))
     app.add_handler(CommandHandler("lichsu", lichsu_command))
     app.add_handler(CommandHandler("bieuedo", bieuedo_command))
+    app.add_handler(CommandHandler("tonghop", tonghop_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     
     
