@@ -4,3 +4,4 @@ python-dotenv
 google-genai
 Flask
 psycopg2-binary
+matplotlib

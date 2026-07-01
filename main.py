@@ -8,7 +8,9 @@ from google import genai
 from telegram import BotCommand
 
 # Import cấu hình Database từ file database.py
-from database import SessionLocal, Transaction
+from database import SessionLocal, Transaction, get_db, get_transactions_by_month
+# Import module tạo biểu đồ
+from charts import generate_monthly_chart
 # Import bộ giữ mạng sống từ file keep_alive.py
 from keep_alive import keep_alive
 
@@ -20,6 +22,40 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # Khởi tạo Client Gemini thế hệ mới
 client = genai.Client(api_key=GEMINI_API_KEY)
 
+
+def parse_month_year(args):
+    """
+    Parse tham số tháng/năm từ lệnh Telegram.
+    Ví dụ:
+        /thongke         -> tháng hiện tại
+        /thongke 6       -> tháng 6, năm hiện tại
+        /thongke 3 2025  -> tháng 3, năm 2025
+    Trả về (month, year) hoặc raise ValueError nếu không hợp lệ.
+    """
+    now = datetime.now()
+    
+    if not args or len(args) == 0:
+        return now.month, now.year
+    
+    try:
+        month = int(args[0])
+        if month < 1 or month > 12:
+            raise ValueError("Tháng phải từ 1 đến 12")
+        
+        if len(args) >= 2:
+            year = int(args[1])
+            if year < 2020 or year > 2030:
+                raise ValueError("Năm phải từ 2020 đến 2030")
+        else:
+            year = now.year
+        
+        return month, year
+    except (ValueError, IndexError) as e:
+        if "Tháng" in str(e) or "Năm" in str(e):
+            raise
+        raise ValueError("Sai cú pháp! Dùng: /lệnh [tháng] [năm]\nVí dụ: /thongke 6 hoặc /thongke 3 2025")
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Lệnh /start khi người dùng bắt đầu chat với bot"""
     user_name = update.message.from_user.first_name
@@ -28,46 +64,51 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Cứ nhắn tự nhiên như: 'Sáng ăn bún bò 45k, đổ xăng 50k' hoặc 'Mới nhận lương làm thêm 3 củ'.\n\n"
         "Các lệnh có sẵn:\n"
         "📊 /thongke - Xem báo cáo thu chi tháng này\n"
-        "⏪ /undo - Xóa nhanh giao dịch vừa nhập"
+        "📜 /lichsu - Xem nhật ký chi tiết các khoản thu chi\n"
+        "📈 /bieuedo - Xem biểu đồ thống kê thu chi\n"
+        "⏪ /undo - Xóa nhanh giao dịch vừa nhập\n\n"
+        "💡 <b>Mẹo:</b> Thêm số tháng sau lệnh để xem tháng khác!\n"
+        "Ví dụ: <code>/thongke 6</code> hoặc <code>/lichsu 3 2025</code>",
+        parse_mode='HTML'
     )
 
 async def thongke_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lệnh /thongke tính tổng thu chi trong tháng hiện tại từ Cloud DB"""
+    """Lệnh /thongke tính tổng thu chi theo tháng từ Cloud DB"""
     user_id = str(update.message.from_user.id)
-    now = datetime.now()
     
     try:
-        db = SessionLocal()
-        # Lấy tất cả giao dịch của user này
-        transactions = db.query(Transaction).filter(Transaction.user_id == user_id).all()
-        db.close()
+        month, year = parse_month_year(context.args)
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {e}")
+        return
+    
+    try:
+        transactions = get_transactions_by_month(user_id, month, year)
         
         tong_thu = 0
         tong_chi = 0
         chi_tiet_chi = {}
         
-        # Quét qua dữ liệu để lọc theo tháng/năm hiện tại
         for t in transactions:
-            if t.created_at.month == now.month and t.created_at.year == now.year:
-                if t.type == 'income':
-                    tong_thu += t.amount
-                elif t.type == 'expense':
-                    tong_chi += t.amount
-                    # Cộng dồn tiền theo danh mục
-                    if t.category in chi_tiet_chi:
-                        chi_tiet_chi[t.category] += t.amount
-                    else:
-                        chi_tiet_chi[t.category] = t.amount
+            if t.type == 'income':
+                tong_thu += t.amount
+            elif t.type == 'expense':
+                tong_chi += t.amount
+                # Cộng dồn tiền theo danh mục
+                if t.category in chi_tiet_chi:
+                    chi_tiet_chi[t.category] += t.amount
+                else:
+                    chi_tiet_chi[t.category] = t.amount
         
         # Định dạng tin nhắn báo cáo bằng HTML
-        msg = f"📊 <b>BÁO CÁO THÁNG {now.month}/{now.year}</b>\n\n"
+        msg = f"📊 <b>BÁO CÁO THÁNG {month}/{year}</b>\n\n"
         msg += f"🟢 Tổng thu: <b>{tong_thu:,.0f} VNĐ</b>\n"
         msg += f"🔴 Tổng chi: <b>{tong_chi:,.0f} VNĐ</b>\n"
         msg += f"-----------------------\n"
         msg += f"<b>Chi tiết các khoản chi:</b>\n"
         
         if not chi_tiet_chi:
-            msg += "<i>Chưa có khoản chi nào trong tháng này.</i>\n"
+            msg += f"<i>Chưa có khoản chi nào trong tháng {month}/{year}.</i>\n"
         else:
             for cat, amount in chi_tiet_chi.items():
                 msg += f"  - {cat}: {amount:,.0f} VNĐ\n"
@@ -79,42 +120,41 @@ async def thongke_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Lỗi khi lấy dữ liệu thống kê: {e}")
 
 async def lichsu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Liệt kê TOÀN BỘ danh sách chi tiết các giao dịch trong tháng hiện tại"""
+    """Liệt kê TOÀN BỘ danh sách chi tiết các giao dịch theo tháng"""
     user_id = str(update.message.from_user.id)
-    now = datetime.now()
     
     try:
-        db = SessionLocal()
-        # Lấy tất cả lịch sử, mới nhất lên đầu
-        transactions = db.query(Transaction).filter(
-            Transaction.user_id == user_id
-        ).order_by(Transaction.id.desc()).all()
-        db.close()
+        month, year = parse_month_year(context.args)
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {e}")
+        return
+    
+    try:
+        transactions = get_transactions_by_month(user_id, month, year)
         
         # Tạo một mảng để chứa các đoạn tin nhắn (tránh bị quá giới hạn của Telegram)
         messages = []
-        current_msg = f"📜 <b>NHẬT KÝ CHI TIÊU THÁNG {now.month}/{now.year}</b>\n"
+        current_msg = f"📜 <b>NHẬT KÝ CHI TIÊU THÁNG {month}/{year}</b>\n"
         current_msg += "---------------------------------\n"
         
         count = 0
         for t in transactions:
-            if t.created_at.month == now.month and t.created_at.year == now.year:
-                count += 1
-                ngay_thang = t.created_at.strftime("%d/%m")
-                icon = '🟢' if t.type == 'income' else '🔴'
-                
-                # Tạo nội dung cho 1 dòng
-                line = f"{icon} <b>{ngay_thang}</b> - {t.category}: <b>{t.amount:,.0f}đ</b> <i>({t.note})</i>\n"
-                
-                # Nếu tin nhắn hiện tại sắp chạm ngưỡng 4000 ký tự của Telegram -> Cắt và sang trang mới
-                if len(current_msg) + len(line) > 3800:
-                    messages.append(current_msg) # Cất tin nhắn hiện tại vào mảng
-                    current_msg = "" # Xóa trắng để viết tin nhắn tiếp theo
-                
-                current_msg += line
+            count += 1
+            ngay_thang = t.created_at.strftime("%d/%m")
+            icon = '🟢' if t.type == 'income' else '🔴'
+            
+            # Tạo nội dung cho 1 dòng
+            line = f"{icon} <b>{ngay_thang}</b> - {t.category}: <b>{t.amount:,.0f}đ</b> <i>({t.note})</i>\n"
+            
+            # Nếu tin nhắn hiện tại sắp chạm ngưỡng 4000 ký tự của Telegram -> Cắt và sang trang mới
+            if len(current_msg) + len(line) > 3800:
+                messages.append(current_msg) # Cất tin nhắn hiện tại vào mảng
+                current_msg = "" # Xóa trắng để viết tin nhắn tiếp theo
+            
+            current_msg += line
         
         if count == 0:
-            current_msg += "<i>Chưa có giao dịch nào được ghi nhận trong tháng này.</i>"
+            current_msg += f"<i>Chưa có giao dịch nào được ghi nhận trong tháng {month}/{year}.</i>"
             
         # Đưa đoạn tin nhắn cuối cùng vào mảng
         messages.append(current_msg)
@@ -127,23 +167,72 @@ async def lichsu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Lỗi khi lấy nhật ký chi tiêu: {e}")
 
+async def bieuedo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lệnh /bieuedo gửi biểu đồ thống kê thu chi dưới dạng ảnh"""
+    user_id = str(update.message.from_user.id)
+    
+    try:
+        month, year = parse_month_year(context.args)
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {e}")
+        return
+    
+    processing_msg = await update.message.reply_text("⏳ Đang tạo biểu đồ...")
+    
+    try:
+        transactions = get_transactions_by_month(user_id, month, year)
+        
+        tong_thu = 0
+        tong_chi = 0
+        chi_tiet_chi = {}
+        
+        for t in transactions:
+            if t.type == 'income':
+                tong_thu += t.amount
+            elif t.type == 'expense':
+                tong_chi += t.amount
+                if t.category in chi_tiet_chi:
+                    chi_tiet_chi[t.category] += t.amount
+                else:
+                    chi_tiet_chi[t.category] = t.amount
+        
+        if tong_thu == 0 and tong_chi == 0:
+            await processing_msg.edit_text(
+                f"📈 Chưa có dữ liệu nào trong tháng {month}/{year} để tạo biểu đồ."
+            )
+            return
+        
+        # Tạo biểu đồ
+        chart_image = generate_monthly_chart(tong_thu, tong_chi, chi_tiet_chi, month, year)
+        
+        # Gửi ảnh biểu đồ cho user
+        await update.message.reply_photo(
+            photo=chart_image,
+            caption=f"📈 Biểu đồ thu chi tháng {month}/{year}"
+        )
+        
+        # Xóa tin nhắn "Đang tạo biểu đồ..."
+        await processing_msg.delete()
+        
+    except Exception as e:
+        await processing_msg.edit_text(f"❌ Lỗi khi tạo biểu đồ: {e}")
+
 async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Lệnh /undo xóa giao dịch vừa nhập gần nhất của user"""
     user_id = str(update.message.from_user.id)
     
     try:
-        db = SessionLocal()
-        # Tìm giao dịch cuối cùng của user (ID lớn nhất)
-        last_tx = db.query(Transaction).filter(Transaction.user_id == user_id).order_by(Transaction.id.desc()).first()
-        
-        if last_tx:
-            thong_tin_xoa = f"{last_tx.category} ({last_tx.amount:,.0f} VNĐ)"
-            db.delete(last_tx)
-            db.commit()
-            await update.message.reply_text(f"⏪ <b>Đã hoàn tác (Undo)!</b>\nĐã xóa dữ liệu: <i>{thong_tin_xoa}</i>", parse_mode='HTML')
-        else:
-            await update.message.reply_text("❌ Bạn chưa có giao dịch nào gần đây để xóa.")
-        db.close()
+        with get_db() as db:
+            # Tìm giao dịch cuối cùng của user (ID lớn nhất)
+            last_tx = db.query(Transaction).filter(Transaction.user_id == user_id).order_by(Transaction.id.desc()).first()
+            
+            if last_tx:
+                thong_tin_xoa = f"{last_tx.category} ({last_tx.amount:,.0f} VNĐ)"
+                db.delete(last_tx)
+                db.commit()
+                await update.message.reply_text(f"⏪ <b>Đã hoàn tác (Undo)!</b>\nĐã xóa dữ liệu: <i>{thong_tin_xoa}</i>", parse_mode='HTML')
+            else:
+                await update.message.reply_text("❌ Bạn chưa có giao dịch nào gần đây để xóa.")
     except Exception as e:
         await update.message.reply_text(f"❌ Lỗi khi thực hiện hoàn tác: {e}")
 
@@ -192,24 +281,23 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if data and isinstance(data, list):
         try:
-            db = SessionLocal()
-            reply_msg = "✅ <b>Đã ghi nhận các giao dịch sau vào CSDL Cloud:</b>\n\n"
-            
-            for item in data:
-                new_transaction = Transaction(
-                    user_id=str(update.message.from_user.id),
-                    amount=item['amount'],
-                    category=item['category'],
-                    type=item['type'],
-                    note=item['note']
-                )
-                db.add(new_transaction)
+            with get_db() as db:
+                reply_msg = "✅ <b>Đã ghi nhận các giao dịch sau vào CSDL Cloud:</b>\n\n"
                 
-                icon = '🔴' if item['type'] == 'expense' else '🟢'
-                reply_msg += f"{icon} {item['category']}: <b>{item['amount']:,} VNĐ</b> <i>({item['note']})</i>\n"
-                
-            db.commit()
-            db.close()
+                for item in data:
+                    new_transaction = Transaction(
+                        user_id=str(update.message.from_user.id),
+                        amount=item['amount'],
+                        category=item['category'],
+                        type=item['type'],
+                        note=item['note']
+                    )
+                    db.add(new_transaction)
+                    
+                    icon = '🔴' if item['type'] == 'expense' else '🟢'
+                    reply_msg += f"{icon} {item['category']}: <b>{item['amount']:,} VNĐ</b> <i>({item['note']})</i>\n"
+                    
+                db.commit()
         except Exception as e:
             reply_msg = f"❌ Nhận diện được nhưng lỗi lưu Database: {e}"
             print(f"Lỗi DB: {e}")
@@ -226,8 +314,9 @@ async def post_init(application: Application):
     """Tự động cài đặt danh sách lệnh gợi ý khi bot khởi động"""
     commands = [
         BotCommand("start", "Khởi động bot Quản gia Tài chính"),
-        BotCommand("thongke", "Xem báo cáo thu chi tháng này"),
-        BotCommand("lichsu", "Xem nhật ký chi tiết các khoản thu chi"),
+        BotCommand("thongke", "Báo cáo thu chi (thêm số tháng để xem tháng khác)"),
+        BotCommand("lichsu", "Nhật ký chi tiết (thêm số tháng để xem tháng khác)"),
+        BotCommand("bieuedo", "Biểu đồ thống kê thu chi"),
         BotCommand("undo", "Xóa nhanh giao dịch vừa nhập")
     ]
     await application.bot.set_my_commands(commands)
@@ -246,6 +335,7 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("thongke", thongke_command))
     app.add_handler(CommandHandler("undo", undo_command))
     app.add_handler(CommandHandler("lichsu", lichsu_command))
+    app.add_handler(CommandHandler("bieuedo", bieuedo_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     
     

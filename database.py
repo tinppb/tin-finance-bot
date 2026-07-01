@@ -1,6 +1,7 @@
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, extract
 from sqlalchemy.orm import declarative_base, sessionmaker
+from contextlib import contextmanager
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -40,3 +41,30 @@ class Transaction(Base):
 
 # Tạo bảng tự động trên server Neon
 Base.metadata.create_all(bind=engine)
+
+
+# --- Context Manager quản lý session an toàn (tự động close dù có lỗi) ---
+@contextmanager
+def get_db():
+    """Mở session DB an toàn, tự động close khi xong hoặc khi lỗi."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def get_transactions_by_month(user_id: str, month: int, year: int):
+    """Query giao dịch theo tháng/năm bằng SQL filter (hiệu quả hơn filter Python)."""
+    with get_db() as db:
+        transactions = db.query(Transaction).filter(
+            Transaction.user_id == user_id,
+            extract('month', Transaction.created_at) == month,
+            extract('year', Transaction.created_at) == year
+        ).order_by(Transaction.id.desc()).all()
+        
+        # Detach khỏi session trước khi trả về (tránh lỗi lazy load sau khi close)
+        for t in transactions:
+            db.expunge(t)
+        
+        return transactions
