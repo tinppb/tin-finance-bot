@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update
@@ -294,40 +295,101 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Lỗi khi thực hiện hoàn tác: {e}")
 
 async def extract_transaction_info(text: str):
-    """Sử dụng Gemini 3.1 Flash Lite bóc tách dữ liệu ra mảng JSON"""
-    prompt = f"""
-    Bạn là một trợ lý tài chính bóc tách dữ liệu. Nhiệm vụ của bạn là đọc câu văn sau và trích xuất thông tin.
-    ĐIỀU KIỆN BẮT BUỘC: Luôn trả về kết quả là MỘT MẢNG JSON (JSON Array) chứa các đối tượng. Dù câu văn chỉ có 1 giao dịch cũng bắt buộc phải bọc trong mảng [].
-    KHÔNG giải thích gì thêm, KHÔNG dùng markdown.
+    """Sử dụng Gemini 3.1 Flash Lite bóc tách dữ liệu ra mảng JSON (có retry)"""
+    prompt = f"""Bạn là một trợ lý tài chính bóc tách dữ liệu. Nhiệm vụ của bạn là đọc câu văn sau và trích xuất thông tin.
+
+ĐIỀU KIỆN BẮT BUỘC:
+- Luôn trả về kết quả là MỘT MẢNG JSON (JSON Array) []. Dù chỉ có 1 giao dịch cũng phải bọc trong [].
+- CHỈ trả về JSON thuần, KHÔNG giải thích, KHÔNG dùng markdown, KHÔNG bọc trong ```json```.
+
+Quy tắc phân loại:
+- type: "expense" (chi tiêu) hoặc "income" (thu nhập).
+- category: chọn 1 trong (An_uong, Di_chuyen, Mua_sam, Hoa_don, Giai_tri, Luong, Thu_nhap_khac).
+- amount: số tiền chính xác (số nguyên, đơn vị VNĐ).
+
+Quy tắc chuyển đổi số tiền:
+- "50k" hoặc "50K" → 50000
+- "3 củ" hoặc "3 triệu" → 3000000  
+- "50 nghìn" → 50000
+- "40.000" hoặc "40,000" → 40000 (dấu chấm/phẩy là phân cách hàng nghìn)
+- "100.000" → 100000
+- Nếu chỉ có số không có đơn vị (ví dụ: "25", "30"), hiểu là đơn vị nghìn VNĐ → nhân 1000. Ví dụ: "25" → 25000, "30" → 30000.
+
+Câu văn: "{text}"
+
+[{{"type": "...", "category": "...", "amount": 0, "note": "mô tả ngắn"}}]"""
+
+    max_retries = 3
+    last_error = None
+    last_raw = None
     
-    Quy tắc phân loại:
-    - type: chỉ được là "expense" (chi tiêu) hoặc "income" (thu nhập).
-    - category: chọn 1 trong các từ (An_uong, Di_chuyen, Mua_sam, Hoa_don, Giai_tri, Luong, Thu_nhap_khac).
-    - amount: số tiền chính xác (chuyển đổi 'k', 'nghìn', 'củ' thành số nguyên). Ví dụ: '50k' -> 50000.
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model='gemini-3.1-flash-lite',
+                contents=prompt
+            )
+            raw_text = response.text
+            last_raw = raw_text
+            
+            # Parse JSON từ response (xử lý nhiều trường hợp bẩn)
+            result = extract_json_from_text(raw_text)
+            if result is not None:
+                return result
+            
+            print(f"--- LẦN THỬ {attempt + 1}: AI trả về nhưng không parse được JSON ---")
+            print(f"Raw response: {raw_text[:500]}")
+            
+        except Exception as e:
+            last_error = e
+            print(f"--- LẦN THỬ {attempt + 1}: LỖI KHI GỌI AI ---")
+            print(f"Chi tiết lỗi: {e}")
     
-    Câu văn: "{text}"
-    
-    Định dạng JSON bắt buộc phải theo mẫu này:
-    [
-        {{
-            "type": "...",
-            "category": "...",
-            "amount": 0,
-            "note": "mô tả ngắn"
-        }}
-    ]
+    # Sau 3 lần thử vẫn lỗi
+    print(f"=== THẤT BẠI SAU {max_retries} LẦN THỬ ===")
+    print(f"Input: {text}")
+    if last_raw:
+        print(f"Raw response cuối: {last_raw[:500]}")
+    if last_error:
+        print(f"Lỗi cuối: {last_error}")
+    return None
+
+
+def extract_json_from_text(text: str):
     """
-    try:
-        response = client.models.generate_content(
-            model='gemini-3.1-flash-lite',
-            contents=prompt
-        )
-        result_text = response.text.replace('```json', '').replace('```', '').strip()
-        return json.loads(result_text)
-    except Exception as e:
-        print(f"--- LỖI KHI GỌI AI ---")
-        print(f"Chi tiết lỗi: {e}")
+    Trích xuất mảng JSON từ response AI, xử lý nhiều trường hợp bẩn:
+    - Response có text thừa trước/sau JSON
+    - Response bọc trong ```json ... ```
+    - Response có dấu xuống dòng, khoảng trắng thừa
+    """
+    if not text:
         return None
+    
+    # Bước 1: Loại bỏ markdown code block
+    cleaned = text.strip()
+    cleaned = cleaned.replace('```json', '').replace('```JSON', '').replace('```', '')
+    cleaned = cleaned.strip()
+    
+    # Bước 2: Thử parse trực tiếp
+    try:
+        result = json.loads(cleaned)
+        if isinstance(result, list):
+            return result
+    except json.JSONDecodeError:
+        pass
+    
+    # Bước 3: Dùng regex tìm mảng JSON [...] trong text
+    match = re.search(r'\[[\s\S]*\]', cleaned)
+    if match:
+        try:
+            result = json.loads(match.group())
+            if isinstance(result, list):
+                return result
+        except json.JSONDecodeError:
+            pass
+    
+    return None
+
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Xử lý tin nhắn văn bản thông thường từ người dùng"""
@@ -359,7 +421,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_msg = f"❌ Nhận diện được nhưng lỗi lưu Database: {e}"
             print(f"Lỗi DB: {e}")
     else:
-        reply_msg = "❌ Lỗi hệ thống: AI không thể bóc tách câu này hoặc định dạng bị sai."
+        reply_msg = (
+            "❌ Không thể bóc tách dữ liệu sau 3 lần thử.\n"
+            "💡 <b>Mẹo:</b> Thử viết rõ hơn, ví dụ:\n"
+            "<code>Ăn phở 25k</code> hoặc <code>Ăn phở 25.000</code>"
+        )
     
     await processing_msg.edit_text(reply_msg, parse_mode='HTML')
 
