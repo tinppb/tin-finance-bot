@@ -295,7 +295,7 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Lỗi khi thực hiện hoàn tác: {e}")
 
 async def extract_transaction_info(text: str):
-    """Sử dụng Gemini 3.1 Flash Lite bóc tách dữ liệu ra mảng JSON (có retry)"""
+    """Sử dụng Gemini 2.0 Flash Lite bóc tách dữ liệu ra mảng JSON (có retry)"""
     prompt = f"""Bạn là một trợ lý tài chính bóc tách dữ liệu. Nhiệm vụ của bạn là đọc câu văn sau và trích xuất thông tin.
 
 ĐIỀU KIỆN BẮT BUỘC:
@@ -304,16 +304,23 @@ async def extract_transaction_info(text: str):
 
 Quy tắc phân loại:
 - type: "expense" (chi tiêu) hoặc "income" (thu nhập).
-- category: chọn 1 trong (An_uong, Di_chuyen, Mua_sam, Hoa_don, Giai_tri, Luong, Thu_nhap_khac).
+- category: chọn 1 trong các danh mục sau:
+  + An_uong: ăn uống, nhậu, cà phê, trà sữa, ăn sáng/trưa/tối, uống nước
+  + Di_chuyen: xăng, xe, grab, taxi, gửi xe, vé tàu/xe/máy bay
+  + Mua_sam: mua đồ, quần áo, giày dép, sách, đồ dùng học tập, văn phòng phẩm, đồ gia dụng
+  + Hoa_don: điện, nước, internet, điện thoại, học phí, tiền nhà, nộp quỹ
+  + Giai_tri: xem phim, ca nhạc, du lịch, game, gym, đi nhảy, thể thao, đá bóng
+  + Luong: lương, thưởng chính thức
+  + Thu_nhap_khac: freelance, bán đồ, tiền thưởng, tiền cho/biếu
 - amount: số tiền chính xác (số nguyên, đơn vị VNĐ).
 
 Quy tắc chuyển đổi số tiền:
 - "50k" hoặc "50K" → 50000
-- "3 củ" hoặc "3 triệu" → 3000000  
+- "3 củ" hoặc "3 triệu" → 3000000
 - "50 nghìn" → 50000
 - "40.000" hoặc "40,000" → 40000 (dấu chấm/phẩy là phân cách hàng nghìn)
 - "100.000" → 100000
-- Nếu chỉ có số không có đơn vị (ví dụ: "25", "30"), hiểu là đơn vị nghìn VNĐ → nhân 1000. Ví dụ: "25" → 25000, "30" → 30000.
+- Nếu chỉ có số không có đơn vị (ví dụ: "25", "30"), hiểu là nghìn VNĐ → nhân 1000.
 
 Câu văn: "{text}"
 
@@ -326,7 +333,7 @@ Câu văn: "{text}"
     for attempt in range(max_retries):
         try:
             response = client.models.generate_content(
-                model='gemini-3.1-flash-lite',
+                model='gemini-2.0-flash-lite',
                 contents=prompt
             )
             raw_text = response.text
