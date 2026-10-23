@@ -324,6 +324,9 @@ Quy tắc chuyển đổi số tiền:
 
 Câu văn: "{text}"
 
+Lưu ý: Câu văn có thể chứa nhiều giao dịch ngăn cách bằng dấu chấm phẩy (;) hoặc dấu phẩy. Mỗi giao dịch là 1 object trong mảng JSON.
+Ví dụ input: "Xem phim 80k; Ăn sáng 25k; Uống cf 12k" → trả về mảng 3 phần tử.
+
 [{{"type": "...", "category": "...", "amount": 0, "note": "mô tả ngắn"}}]"""
 
     max_retries = 3
@@ -400,7 +403,11 @@ def extract_json_from_text(text: str):
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Xử lý tin nhắn văn bản thông thường từ người dùng"""
-    text = update.message.text
+    raw_text = update.message.text
+    
+    # Chuẩn hóa input: thay xuống dòng bằng dấu chấm phẩy để AI xử lý được nhiều giao dịch trên 1 tin nhắn
+    text = raw_text.replace('\n', '; ').strip()
+    
     processing_msg = await update.message.reply_text("⏳ Đang phân tích dữ liệu...")
     
     data = await extract_transaction_info(text)
