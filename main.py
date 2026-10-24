@@ -336,7 +336,7 @@ Ví dụ input: "Xem phim 80k; Ăn sáng 25k; Uống cf 12k" → trả về mả
     for attempt in range(max_retries):
         try:
             response = client.models.generate_content(
-                model='gemini-2.0-flash-lite',
+                model='gemini-flash-lite-latest',
                 contents=prompt
             )
             raw_text = response.text
