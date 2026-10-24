@@ -10,9 +10,12 @@ load_dotenv()
 # Lấy đường dẫn DB từ biến môi trường
 SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Vá lỗi nhỏ: SQLAlchemy bản mới bắt buộc dùng 'postgresql://' thay vì 'postgres://'
-if SQLALCHEMY_DATABASE_URL and SQLALCHEMY_DATABASE_URL.startswith("postgres://"):
-    SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgres://", "postgresql://", 1)
+# Chỉ định rõ driver psycopg2 để tránh SQLAlchemy mới tự chọn psycopg3 (chưa cài)
+if SQLALCHEMY_DATABASE_URL:
+    if SQLALCHEMY_DATABASE_URL.startswith("postgres://"):
+        SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
+    elif SQLALCHEMY_DATABASE_URL.startswith("postgresql://"):
+        SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
 
 
 engine = create_engine(
